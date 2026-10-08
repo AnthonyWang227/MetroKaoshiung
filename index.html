@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高雄捷運即時到站動態 KMRT Realtime</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        #map { height: calc(100vh - 73px); width: 100%; }
+        .custom-popup .leaflet-popup-content-wrapper {
+            background: #1f2937;
+            color: #f3f4f6;
+            border-radius: 0.75rem;
+            padding: 0.25rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+        .custom-popup .leaflet-popup-tip {
+            background: #1f2937;
+        }
+        /* Custom Scrollbar for Drawer */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between shrink-0 z-20">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-red-600 flex items-center justify-center shadow-lg shadow-red-950/50">
+                <i class="fa-solid fa-train-subway text-white text-lg"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                    高雄捷運即時到站動態
+                    <span class="bg-gray-700 text-gray-300 text-xs px-2 py-0.5 rounded-full font-normal">KMRT Realtime</span>
+                </h1>
+                <p class="text-xs text-gray-400">全線各站即時班次預估與進站狀態監控</p>
+            </div>
+        </div>
+
+        <!-- Controls / Filter -->
+        <div class="flex items-center space-x-3">
+            <div class="hidden sm:flex bg-gray-900 p-1 rounded-xl border border-gray-700 text-xs">
+                <button id="filter-all" onclick="filterLine('ALL')" class="px-3 py-1.5 rounded-lg font-medium transition-all bg-gray-700 text-white">全部</button>
+                <button id="filter-red" onclick="filterLine('R')" class="px-3 py-1.5 rounded-lg font-medium transition-all text-red-400 hover:text-white flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-red-500"></span>紅線
+                </button>
+                <button id="filter-orange" onclick="filterLine('O')" class="px-3 py-1.5 rounded-lg font-medium transition-all text-amber-400 hover:text-white flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-amber-500"></span>橘線
+                </button>
+            </div>
+
+            <button onclick="refreshData()" class="p-2 rounded-xl bg-gray-700 hover:bg-gray-600 active:scale-95 text-gray-200 transition-all shadow" title="重新整理即時動態">
+                <i id="refresh-icon" class="fa-solid fa-rotate-right"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <div class="relative flex-1 flex overflow-hidden">
+        
+        <!-- Map Canvas -->
+        <div id="map" class="z-0"></div>
+
+        <!-- Map Legend Floating Card -->
+        <div class="absolute top-4 right-4 z-10 bg-gray-800/90 backdrop-blur-md p-3.5 rounded-2xl border border-gray-700/80 shadow-2xl text-xs space-y-2 pointer-events-auto max-w-xs hidden md:block">
+            <div class="font-semibold text-gray-300 pb-1 border-b border-gray-700 flex justify-between items-center">
+                <span>高雄捷運路線標誌</span>
+                <span class="text-[10px] text-gray-400">KMRT</span>
+            </div>
+            <div class="space-y-1.5">
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 rounded-full bg-red-500 inline-block shadow-sm"></span>
+                    <span class="text-gray-200 font-medium">紅線 (小港 ⇌ 岡山車站)</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 rounded-full bg-amber-500 inline-block shadow-sm"></span>
+                    <span class="text-gray-200 font-medium">橘線 (哈瑪星 ⇌ 大寮)</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="w-3.5 h-3.5 rounded-full border-2 border-amber-400 bg-red-500 inline-block"></span>
+                    <span class="text-gray-200 font-medium">轉乘大站 (美麗島站)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Station Realtime Panel (Drawer) -->
+        <div id="station-panel" class="absolute bottom-0 left-0 right-0 sm:left-4 sm:bottom-4 sm:right-auto sm:w-96 z-10 bg-gray-800/95 backdrop-blur-md rounded-t-2xl sm:rounded-2xl border border-gray-700 shadow-2xl transition-all duration-300 transform translate-y-full sm:translate-y-0 opacity-0 pointer-events-none">
+            <div class="p-4 space-y-3 max-h-[80vh] overflow-y-auto">
+                <div class="flex items-center justify-between border-b border-gray-700 pb-3">
+                    <div class="flex items-center space-x-2.5">
+                        <span id="panel-station-badge" class="px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-red-600">R10</span>
+                        <div>
+                            <h2 id="panel-station-name" class="font-bold text-base text-white">美麗島 Formosa Blvd</h2>
+                            <p id="panel-station-sub" class="text-xs text-gray-400">紅線 / 橘線 核心轉乘站</p>
+                        </div>
+                    </div>
+                    <button onclick="closePanel()" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <!-- Realtime Departures List -->
+                <div class="space-y-2">
+                    <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-clock text-amber-400"></i> 即時列車到站預估
+                    </h3>
+                    <div id="panel-realtime-content" class="space-y-2">
+                        <!-- Dynamic realtime items populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 1. Stations Complete Dataset with Exact Geographic Coordinates ---
+        const kmrtStations = [
+            // Red Line (北上/南下)
+            { id: "R3", name: "小港", nameEn: "Siaogang", line: "R", lat: 22.5630, lng: 120.3541 },
+            { id: "R4", name: "高雄國際機場", nameEn: "Kaohsiung Int'l Airport", line: "R", lat: 22.5711, lng: 120.3444 },
+            { id: "R4A", name: "草衙", nameEn: "Caoya", line: "R", lat: 22.5816, lng: 120.3308 },
+            { id: "R5", name: "前鎮高中", nameEn: "Cianjhen Senior High", line: "R", lat: 22.5925, lng: 120.3207 },
+            { id: "R6", name: "凱旋", nameEn: "Kaisyuan", line: "R", lat: 22.6006, lng: 120.3150 },
+            { id: "R7", name: "獅甲", nameEn: "Shihjia", line: "R", lat: 22.6074, lng: 120.3083 },
+            { id: "R8", name: "三多商圈", nameEn: "Sanduo Shopping District", line: "R", lat: 22.6139, lng: 120.3039 },
+            { id: "R9", name: "中央公園", nameEn: "Central Park", line: "R", lat: 22.6231, lng: 120.3014 },
+            { id: "R10", name: "美麗島", nameEn: "Formosa Boulevard", line: "R", isTransfer: true, lat: 22.6314, lng: 120.3019 },
+            { id: "R11", name: "高雄車站", nameEn: "Kaohsiung Main Station", line: "R", lat: 22.6381, lng: 120.3022 },
+            { id: "R12", name: "後驛", nameEn: "Houyi", line: "R", lat: 22.6483, lng: 120.3028 },
+            { id: "R13", name: "凹子底", nameEn: "Aozihdi", line: "R", lat: 22.6589, lng: 120.3033 },
+            { id: "R14", name: "巨蛋", nameEn: "Kaohsiung Arena", line: "R", lat: 22.6661, lng: 120.3025 },
+            { id: "R15", name: "生態園區", nameEn: "Ecological District", line: "R", lat: 22.6761, lng: 120.3022 },
+            { id: "R16", name: "左營/高鐵", nameEn: "Zuoying (THSR)", line: "R", lat: 22.6875, lng: 120.3075 },
+            { id: "R17", name: "世運", nameEn: "World Games", line: "R", lat: 22.7019, lng: 120.3025 },
+            { id: "R18", name: "油廠國小", nameEn: "Oil Refinery Elem. School", line: "R", lat: 22.7125, lng: 120.3056 },
+            { id: "R19", name: "楠梓科技園區", nameEn: "Nanzih Tech Park", line: "R", lat: 22.7231, lng: 120.3103 },
+            { id: "R20", name: "後勁", nameEn: "Houjing", line: "R", lat: 22.7292, lng: 120.3183 },
+            { id: "R21", name: "都會公園", nameEn: "Metropolitan Park", line: "R", lat: 22.7364, lng: 120.3253 },
+            { id: "R22", name: "青埔", nameEn: "Cingpu", line: "R", lat: 22.7481, lng: 120.3258 },
+            { id: "R22A", name: "橋頭糖廠", nameEn: "Ciaotou Sugar Refinery", line: "R", lat: 22.7561, lng: 120.3156 },
+            { id: "R23", name: "橋頭火車站", nameEn: "Ciaotou Station", line: "R", lat: 22.7608, lng: 120.3122 },
+            { id: "R24", name: "岡山高醫", nameEn: "KMU Gangshan Hospital", line: "R", lat: 22.7800, lng: 120.2981 },
+            { id: "RK1", name: "岡山車站", nameEn: "Gangshan Station", line: "R", lat: 22.7958, lng: 120.2989 },
+
+            // Orange Line (西向/東向)
+            { id: "O1", name: "哈瑪星", nameEn: "Hamasen", line: "O", lat: 22.6219, lng: 120.2750 },
+            { id: "O2", name: "鹽埕埔", nameEn: "Yanchengpu", line: "O", lat: 22.6253, lng: 120.2831 },
+            { id: "O4", name: "前金", nameEn: "Cianjin", line: "O", lat: 22.6289, lng: 120.2936 },
+            { id: "O6", name: "信義國小", nameEn: "Sinyi Elementary School", line: "O", lat: 22.6300, lng: 120.3122 },
+            { id: "O7", name: "文化中心", nameEn: "Cultural Center", line: "O", lat: 22.6294, lng: 120.3183 },
+            { id: "O8", name: "五塊厝", nameEn: "Wukuaicuo", line: "O", lat: 22.6289, lng: 120.3283 },
+            { id: "O9", name: "苓雅運動園區", nameEn: "Lingya Sports Park", line: "O", lat: 22.6278, lng: 120.3344 },
+            { id: "O10", name: "衛武營", nameEn: "Weiwuying", line: "O", lat: 22.6256, lng: 120.3425 },
+            { id: "O11", name: "鳳山西站", nameEn: "Fongshan West", line: "O", lat: 22.6247, lng: 120.3522 },
+            { id: "O12", name: "鳳山", nameEn: "Fongshan", line: "O", lat: 22.6258, lng: 120.3608 },
+            { id: "O13", name: "大東", nameEn: "Dadong", line: "O", lat: 22.6253, lng: 120.3689 },
+            { id: "O14", name: "鳳山國中", nameEn: "Fongshan Junior High", line: "O", lat: 22.6250, lng: 120.3789 },
+            { id: "OT1", name: "大寮", nameEn: "Daliao", line: "O", lat: 22.6219, lng: 120.3956 }
+        ];
+
+        // --- 2. Explicit Sequential Ordering for Polylines to Prevent Cross-Lines ---
+        const RED_LINE_ORDER = [
+            'R3', 'R4', 'R4A', 'R5', 'R6', 'R7', 'R8', 'R9', 
+            'R10', 'R11', 'R12', 'R13', 'R14', 'R15', 'R16', 
+            'R17', 'R18', 'R19', 'R20', 'R21', 'R22', 'R22A', 'R23', 'R24', 'RK1'
+        ];
+
+        const ORANGE_LINE_ORDER = [
+            'O1', 'O2', 'O4', 'R10', 'O6', 'O7', 'O8', 
+            'O9', 'O10', 'O11', 'O12', 'O13', 'O14', 'OT1'
+        ];
+
+        let map, stationMarkers = {}, redPolyline, orangePolyline;
+        let activeFilter = 'ALL';
+
+        // --- STREAMING_CHUNK:Initializing Leaflet Map and Drawing Tracks... ---
+        window.onload = function() {
+            // Initialize Leaflet Map centered around Kaohsiung City Center
+            map = L.map('map', {
+                zoomControl: true,
+                attributionControl: true
+            }).setView([22.6314, 120.3019], 13);
+
+            // Use OpenStreetMap standard tiles (Free, no API key required)
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Draw tracks
+            drawMRTTracks();
+
+            // Render Station Markers
+            renderStationMarkers();
+
+            // Auto-select Formosa Blvd on load
+            selectStation("R10");
+        };
+
+        function drawMRTTracks() {
+            // Map station IDs to latlng coordinates according to explicit sequence
+            const stationMap = {};
+            kmrtStations.forEach(s => stationMap[s.id] = [s.lat, s.lng]);
+
+            const redCoords = RED_LINE_ORDER.map(id => stationMap[id]).filter(Boolean);
+            const orangeCoords = ORANGE_LINE_ORDER.map(id => stationMap[id]).filter(Boolean);
+
+            // Red Line Polyline
+            redPolyline = L.polyline(redCoords, {
+                color: '#ef4444',
+                weight: 6,
+                opacity: 0.85,
+                lineCap: 'round',
+                lineJoin: 'round'
+            }).addTo(map);
+
+            // Orange Line Polyline
+            orangePolyline = L.polyline(orangeCoords, {
+                color: '#f59e0b',
+                weight: 6,
+                opacity: 0.85,
+                lineCap: 'round',
+                lineJoin: 'round'
+            }).addTo(map);
+        }
+
+        function renderStationMarkers() {
+            kmrtStations.forEach(station => {
+                const isRed = station.line === 'R';
+                const isTransfer = station.isTransfer;
+
+                let markerHtml = '';
+                if (isTransfer) {
+                    markerHtml = `
+                        <div class="relative flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-r from-red-500 to-amber-500 p-0.5 shadow-lg shadow-amber-500/40 transform transition hover:scale-125 cursor-pointer">
+                            <div class="w-full h-full bg-gray-900 rounded-full flex items-center justify-center border border-white">
+                                <span class="w-2.5 h-2.5 bg-amber-400 rounded-full animate-pulse"></span>
+                            </div>
+                        </div>`;
+                } else if (isRed) {
+                    markerHtml = `
+                        <div class="w-5 h-5 rounded-full bg-red-500 border-2 border-gray-900 shadow-md flex items-center justify-center transform transition hover:scale-125 cursor-pointer">
+                            <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+                        </div>`;
+                } else {
+                    markerHtml = `
+                        <div class="w-5 h-5 rounded-full bg-amber-500 border-2 border-gray-900 shadow-md flex items-center justify-center transform transition hover:scale-125 cursor-pointer">
+                            <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+                        </div>`;
+                }
+
+                const customIcon = L.divIcon({
+                    html: markerHtml,
+                    className: 'custom-station-icon',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                });
+
+                const marker = L.marker([station.lat, station.lng], { icon: customIcon }).addTo(map);
+
+                marker.on('click', () => {
+                    selectStation(station.id);
+                });
+
+                stationMarkers[station.id] = { marker, data: station };
+            });
+        }
+
+        function selectStation(stationId) {
+            const item = kmrtStations.find(s => s.id === stationId);
+            if (!item) return;
+
+            map.panTo([item.lat, item.lng], { animate: true, duration: 0.5 });
+
+            const panel = document.getElementById('station-panel');
+            const badge = document.getElementById('panel-station-badge');
+            const name = document.getElementById('panel-station-name');
+            const sub = document.getElementById('panel-station-sub');
+            const content = document.getElementById('panel-realtime-content');
+
+            // Badge Color setup
+            if (item.isTransfer) {
+                badge.className = "px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-red-500 to-amber-500";
+                badge.innerText = "R10 / O5";
+                sub.innerText = "美麗島轉乘樞紐 (紅線 ⇌ 橘線)";
+            } else if (item.line === 'R') {
+                badge.className = "px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-red-600";
+                badge.innerText = item.id;
+                sub.innerText = "捷運紅線車站";
+            } else {
+                badge.className = "px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-amber-600";
+                badge.innerText = item.id;
+                sub.innerText = "捷運橘線車站";
+            }
+
+            name.innerText = `${item.name} ${item.nameEn}`;
+
+            // Generate Mock Realtime Train Arrival Data
+            const arrivals = generateMockArrivals(item);
+            content.innerHTML = arrivals.map(a => `
+                <div class="flex items-center justify-between p-2.5 bg-gray-900/80 rounded-xl border border-gray-700/60">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="w-2.5 h-2.5 rounded-full ${a.line === 'R' ? 'bg-red-500' : 'bg-amber-500'}"></span>
+                        <div>
+                            <p class="text-xs font-semibold text-gray-200">往 ${a.destination}</p>
+                            <p class="text-[10px] text-gray-400">${a.trainNo} 次列車</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="${a.mins <= 2 ? 'text-emerald-400 font-bold animate-pulse' : 'text-amber-300 font-semibold'} text-sm">
+                            ${a.mins <= 0 ? '進站中' : a.mins + ' 分鐘'}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+
+            panel.classList.remove('translate-y-full', 'opacity-0', 'pointer-events-none');
+            panel.classList.add('translate-y-0', 'opacity-100', 'pointer-events-auto');
+        }
+
+        function generateMockArrivals(station) {
+            const list = [];
+            if (station.line === 'R' || station.isTransfer) {
+                list.push({ line: 'R', destination: '岡山車站 (Gangshan)', mins: Math.floor(Math.random() * 5) + 1, trainNo: '102' });
+                list.push({ line: 'R', destination: '小港 (Siaogang)', mins: Math.floor(Math.random() * 8) + 3, trainNo: '105' });
+            }
+            if (station.line === 'O' || station.isTransfer) {
+                list.push({ line: 'O', destination: '大寮 (Daliao)', mins: Math.floor(Math.random() * 6) + 2, trainNo: '201' });
+                list.push({ line: 'O', destination: '哈瑪星 (Hamasen)', mins: Math.floor(Math.random() * 7) + 4, trainNo: '204' });
+            }
+            return list;
+        }
+
+        function closePanel() {
+            const panel = document.getElementById('station-panel');
+            panel.classList.add('translate-y-full', 'opacity-0', 'pointer-events-none');
+            panel.classList.remove('translate-y-0', 'opacity-100', 'pointer-events-auto');
+        }
+
+        function filterLine(line) {
+            activeFilter = line;
+
+            // Button highlights
+            document.getElementById('filter-all').className = line === 'ALL' ? 'px-3 py-1.5 rounded-lg font-medium transition-all bg-gray-700 text-white' : 'px-3 py-1.5 rounded-lg font-medium transition-all text-gray-400 hover:text-white';
+            document.getElementById('filter-red').className = line === 'R' ? 'px-3 py-1.5 rounded-lg font-medium transition-all bg-red-600/30 text-red-400 border border-red-500/40' : 'px-3 py-1.5 rounded-lg font-medium transition-all text-red-400 hover:text-white';
+            document.getElementById('filter-orange').className = line === 'O' ? 'px-3 py-1.5 rounded-lg font-medium transition-all bg-amber-600/30 text-amber-400 border border-amber-500/40' : 'px-3 py-1.5 rounded-lg font-medium transition-all text-amber-400 hover:text-white';
+
+            // Toggle Polylines
+            if (line === 'ALL') {
+                map.addLayer(redPolyline);
+                map.addLayer(orangePolyline);
+            } else if (line === 'R') {
+                map.addLayer(redPolyline);
+                map.removeLayer(orangePolyline);
+            } else if (line === 'O') {
+                map.removeLayer(redPolyline);
+                map.addLayer(orangePolyline);
+            }
+
+            // Toggle Markers
+            Object.values(stationMarkers).forEach(({ marker, data }) => {
+                if (line === 'ALL' || data.isTransfer || data.line === line) {
+                    marker.addTo(map);
+                } else {
+                    map.removeLayer(marker);
+                }
+            });
+        }
+
+        function refreshData() {
+            const icon = document.getElementById('refresh-icon');
+            icon.classList.add('fa-spin');
+            setTimeout(() => {
+                icon.classList.remove('fa-spin');
+            }, 600);
+        }
+    </script>
+</body>
+</html>
